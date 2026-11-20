@@ -1,16 +1,345 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Guest List | Roi & Jestel</title><style>:root{font-family:system-ui,sans-serif;color:#f4e9d7;background:#101111}*{box-sizing:border-box}body{margin:0}main{max-width:950px;margin:0 auto;padding:3rem 1rem}h1,h2{font-family:Georgia,serif;font-weight:400;color:#d9b779}input,textarea,button{font:inherit}input,textarea{width:100%;background:#1c1c1c;color:#fff;border:1px solid #9b794b;padding:.9rem;border-radius:5px}label{display:block;margin:1rem 0 .35rem}button{background:#caa56d;color:#111;border:0;padding:.85rem 1.2rem;border-radius:5px;cursor:pointer}button:disabled{opacity:.5}button.secondary{background:transparent;color:#e3c38e;border:1px solid #9b794b}button.danger{background:#502b2b;color:#fff}article{border:1px solid #655239;margin:1rem 0;padding:1rem;border-radius:8px}.stats{display:flex;gap:1rem;flex-wrap:wrap;color:#d9b779}.stats span{border:1px solid #655239;padding:1rem;border-radius:6px}header{display:flex;justify-content:space-between;align-items:center;gap:1rem}.row{display:flex;justify-content:space-between;gap:1rem;align-items:center}.muted{color:#b7aa98}.error{color:#ffb4a8}.members{line-height:1.8}#app[hidden],#login[hidden]{display:none}textarea{min-height:125px}</style></head><body><main><header><h1>Roi & Jestel · Guest List</h1><a href="../" style="color:#d9b779">Wedding website</a></header><section id="login"><h2>Private access</h2><p>Enter your admin passcode. Guest management will be available after Google Sheets is connected.</p><form id="login-form"><label for="pass">Passcode</label><input id="pass" type="password" required autocomplete="current-password"><p><button>Unlock guest list</button></p></form><p id="login-message" role="status"></p></section><div id="app" hidden><div class="row"><h2>Invitations</h2><button id="logout" class="secondary">Lock admin</button></div><div class="stats" id="stats"></div><section><h2>Add a family / group</h2><form id="add-form"><label for="group-name">Family or group name</label><input id="group-name" placeholder="e.g. Santos Family" required maxlength="120"><label for="members">Invited guests (one full name per line)</label><textarea id="members" placeholder="Maria Santos&#10;Jose Santos&#10;Ana Santos" required></textarea><p><button>Add invitation</button></p></form><p id="add-message" role="status"></p></section><section><h2>Guest list & RSVP responses</h2><div id="groups"></div></section></div></main><script src="../config.js"></script><script>
-// Replace with your Worker URL after deployment.
-const API_BASE=window.WEDDING_API_BASE||'';
-// Set the final GitHub Pages or custom domain in config.js when ready.
-const INVITATION_SITE_URL=window.WEDDING_SITE_URL || new URL('../',location.href).href;
-function invitationUrl(code){const url=new URL(INVITATION_SITE_URL);url.searchParams.set('invite',code);return url.toString()}
-let session=sessionStorage.getItem('wedding_admin_session')||'';
-const $=id=>document.getElementById(id);const show=on=>{$('login').hidden=on;$('app').hidden=!on};
-async function api(path,opts={}){if(!API_BASE)throw Error('Google Sheets integration has not been configured yet.');const r=await fetch(API_BASE+path,{...opts,headers:{'Content-Type':'application/json',Authorization:'Bearer '+session}});const data=await r.json();if(!r.ok || data.ok===false)throw Error(data.error||'Request failed');return data;}
-$('login-form').onsubmit=async e=>{e.preventDefault();$('login-message').textContent='Checking…';try{const data=await api('/api/admin/login',{method:'POST',body:JSON.stringify({passcode:$('pass').value})});session=data.token;sessionStorage.setItem('wedding_admin_session',session);$('pass').value='';show(true);await load();$('login-message').textContent='';}catch(err){$('login-message').textContent=err.message;}};
-$('logout').onclick=()=>{session='';sessionStorage.removeItem('wedding_admin_session');show(false)};
-$('add-form').onsubmit=async e=>{e.preventDefault();const name=$('group-name').value.trim(),members=$('members').value.split('\n').map(s=>s.trim()).filter(Boolean);try{const existing=await api('/api/admin/groups',{method:'POST',body:JSON.stringify({operation:'list'})});const ids=existing.guests.map(g=>g.groupId);let num=1;while(ids.includes('F'+String(num).padStart(3,'0')))num++;const groupId='F'+String(num).padStart(3,'0');for(const member of members){await api('/api/admin/guest/upsert',{method:'POST',body:JSON.stringify({groupId,groupName:name,name:member,status:'Pending'})});}$('add-form').reset();$('add-message').textContent='Invitation added.';await load()}catch(err){$('add-message').textContent=err.message}};
-async function load(){try{const {guests}=await api('/api/admin/groups',{method:'POST',body:JSON.stringify({operation:'list'})});const groupsMap=new Map();guests.forEach(g=>{if(!groupsMap.has(g.groupId))groupsMap.set(g.groupId,{id:g.groupId,name:g.groupName,code:g.code,members:[]});groupsMap.get(g.groupId).members.push(g)});const groups=[...groupsMap.values()];$('groups').replaceChildren();$('stats').replaceChildren();const attending=guests.filter(g=>g.status==='Attending').length;const declined=guests.filter(g=>g.status==='Declined').length;[`${groups.length} invitations`,`${guests.length} invited guests`,`${attending} attending`,`${declined} declined`,`${guests.length-attending-declined} pending`].forEach(s=>{const span=document.createElement('span');span.textContent=s;$('stats').append(span)});groups.forEach(g=>{const article=document.createElement('article');const heading=document.createElement('h3');heading.textContent=g.name;const copy=document.createElement('button');copy.className='secondary';copy.textContent='Copy invitation link';copy.onclick=async()=>{const link=invitationUrl(g.code);try{await navigator.clipboard.writeText(link);copy.textContent='Copied!';setTimeout(()=>copy.textContent='Copy invitation link',1800)}catch{prompt('Copy this link:',link)}};const row=document.createElement('div');row.className='row';row.append(heading,copy);article.append(row);g.members.forEach(m=>{const line=document.createElement('div');line.className='row';const label=document.createElement('span');label.textContent=`${m.name} — ${m.status}`;const edit=document.createElement('button');edit.className='secondary';edit.textContent='Edit';edit.onclick=async()=>{const name=prompt('Guest full name',m.name);if(name===null||!name.trim())return;const status=prompt('Status: Pending, Attending, Declined',m.status);if(status===null)return;try{await api('/api/admin/guest/upsert',{method:'POST',body:JSON.stringify({guestId:m.guestId,groupId:g.id,groupName:g.name,name:name.trim(),status})});await load()}catch(e){alert(e.message)}};const del=document.createElement('button');del.className='danger';del.textContent='Delete';del.onclick=async()=>{if(!confirm('Delete '+m.name+'?'))return;try{await api('/api/admin/guest/delete',{method:'POST',body:JSON.stringify({guestId:m.guestId})});await load()}catch(e){alert(e.message)}};const actions=document.createElement('div');actions.className='row';actions.append(edit,del);line.append(label,actions);article.append(line)});$('groups').append(article)})}catch(err){session='';sessionStorage.removeItem('wedding_admin_session');show(false);$('login-message').textContent=err.message}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#30382b">
+<meta name="description" content="The wedding celebration of Roi Lauren and Jestel Diona, January 7, 2027 in Baguio City.">
+<title>Roi & Jestel | January 7, 2027</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Italianno&family=Montserrat:wght@300;400;500;600&family=Playfair+Display+SC:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--forest:#30382b;--cream:#f5f0e9;--ivory:#eee5da;--gold:#a67640;--lightgold:#d5b06d;--sage:#303a30;--ink:#30382b;--rsvp:#a37747}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--forest);font-family:Montserrat,Arial,sans-serif;color:var(--ink)}button,select,input{font:inherit}button{cursor:pointer}a{color:inherit}section{width:100%;overflow:hidden;position:relative}.container{width:min(100% - 8vw,1280px);margin-inline:auto}.eyebrow{text-transform:uppercase;font-size:clamp(.78rem,1.3vw,1.2rem);font-weight:400;letter-spacing:.02em;margin:0 0 .35rem}.section-title{font-family:'Playfair Display SC',Georgia,serif;font-size:clamp(2rem,4vw,3.5rem);font-weight:400;line-height:1.2;margin:0}.ornament{display:flex;align-items:center;justify-content:center;gap:1rem;color:var(--gold);margin:1.25rem auto 2.4rem;width:min(100%,520px)}.ornament:before,.ornament:after{content:'';height:1px;background:currentColor;flex:1}.ornament span{font-family:Georgia,serif;font-size:1.9rem;line-height:1}.reveal{opacity:0;transform:translateY(35px);transition:opacity .85s ease,transform .85s cubic-bezier(.2,.7,.2,1)}.reveal.visible{opacity:1;transform:translateY(0)}.delay-1{transition-delay:.13s}.delay-2{transition-delay:.26s}.delay-3{transition-delay:.39s}
+/* Opening */
+#intro{position:fixed;inset:0;z-index:100;background:#0c0c0c;display:grid;place-items:center;transition:opacity .8s ease,visibility .8s ease}#intro.dismissed{opacity:0;visibility:hidden;pointer-events:none}.enter-btn{border:1px solid var(--lightgold);background:transparent;color:#eee6dd;padding:1.55rem 2rem;min-width:min(80vw,407px);font-size:clamp(1.05rem,2.1vw,1.9rem);font-weight:300;text-transform:uppercase;transition:background .3s,color .3s,transform .3s;animation:appear 1.2s ease both}.enter-btn:hover{background:var(--lightgold);color:#111;transform:scale(1.025)}@keyframes appear{from{opacity:0;transform:translateY(15px)}to{opacity:1;transform:translateY(0)}}body.locked{overflow:hidden}
+/* Hero */
+#landing{height:100svh;min-height:0;background:var(--forest);color:var(--cream);display:flex;flex-direction:column;align-items:center;padding:1rem 2rem 1rem;text-align:center}.topnav{display:flex;gap:clamp(1rem,3vw,3rem);justify-content:center;flex-wrap:wrap}.topnav a{text-decoration:none;font-size:clamp(.72rem,1.2vw,1.08rem);font-weight:400;position:relative}.topnav a:after{content:'';position:absolute;bottom:-.5rem;left:0;width:0;height:1px;background:var(--lightgold);transition:width .3s}.topnav a:hover:after{width:100%}.invitation{border:1px solid var(--gold);width:min(100%,1360px);flex:1;min-height:0;margin-top:.8rem;padding:clamp(.65rem,2vh,1.8rem) 1rem;display:flex;flex-direction:column;align-items:center;justify-content:center}.invite-prelude{font-size:clamp(.83rem,1.5vw,1.3rem);line-height:1.25;margin:0}.invitation .ornament{margin:.7rem auto}.couple{font-family:'Great Vibes','Italianno',cursive;font-size:clamp(3.4rem,6.2vw,6.2rem);font-weight:400;line-height:1.15;margin:0}.amp{font-family:Georgia,serif;font-size:clamp(2rem,3vw,3.5rem);color:var(--gold);font-style:italic;line-height:1.1}.date-row{display:flex;justify-content:center;align-items:center;gap:3rem;margin-top:.5rem;font-size:clamp(1rem,1.65vw,1.55rem);letter-spacing:.02em}.date-block{display:flex;flex-direction:column;align-items:center}.date-block strong{color:var(--gold);font-size:2.8rem;line-height:1.15}.date-divider{height:clamp(60px,11vh,100px);width:1px;background:var(--gold);position:relative}.date-divider:before,.date-divider:after{content:'◆';position:absolute;left:50%;transform:translateX(-50%);font-size:.45rem;color:var(--gold)}.date-divider:before{top:-5px}.date-divider:after{bottom:-5px}
+/* Gallery */
+#gallery{background:#efe7db;padding:clamp(4rem,7vw,7rem) 0 4.5rem;text-align:center}.gold{color:var(--gold)}.gallery-stage{display:flex;align-items:center;gap:clamp(.5rem,2vw,2rem);margin:2rem auto 2.5rem}.gallery-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(.5rem,1.7vw,1.5rem);flex:1}.photo{aspect-ratio:1 / 1.04;background:linear-gradient(145deg,#e9dbc6,#dfceb1);display:grid;place-items:center;color:var(--gold);overflow:hidden}.photo img{width:100%;height:100%;object-fit:cover;animation:photoIn .6s ease both}.photo-placeholder{display:flex;align-items:center;justify-content:center;width:100%;height:100%;position:relative}.photo-placeholder:before{content:"";position:absolute;inset:7%;border:1px solid rgba(166,118,64,.35)}.photo-placeholder:after{content:"";position:absolute;inset:11%;border:1px solid rgba(166,118,64,.16)}.photo-placeholder svg{width:clamp(85px,16vw,215px);height:auto;max-width:75%;stroke:#a67640;fill:none;stroke-width:1.15;filter:drop-shadow(0 1px 0 rgba(255,255,255,.55));animation:decoAppear 1.2s ease both}@keyframes decoAppear{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:scale(1)}}@keyframes photoIn{from{opacity:0;transform:scale(1.04)}to{opacity:1;transform:scale(1)}}.arrow{border:0;background:none;color:var(--gold);font-family:Georgia,serif;font-size:3.5rem;line-height:1;padding:.5rem;transition:transform .25s}.arrow:hover{transform:scale(1.15)}.gallery-message{font-size:clamp(1rem,1.65vw,1.45rem);line-height:1.5;margin:1.5rem auto}.signature{font-family:'Great Vibes',cursive;color:var(--gold);font-size:clamp(2.3rem,3.5vw,3.6rem);margin:1.2rem 0 0}
+/* Details */
+#details{background:#f8f4ee;padding:clamp(4rem,7vw,7rem) 0 5rem;text-align:center}.venue-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(1rem,3vw,3rem);margin-top:3.2rem}.venue{border:1px solid var(--gold);min-height:390px;display:flex;flex-direction:column;justify-content:center;align-items:center;padding:2.5rem 1rem}.venue .flourish{font-size:2rem;color:var(--gold)}.venue h3{font:400 clamp(2rem,3.5vw,3.3rem) 'Playfair Display SC',Georgia,serif;color:var(--gold);margin:.7rem 0 1.2rem}.venue p{font-size:clamp(.9rem,1.55vw,1.4rem);line-height:1.35;margin:0 0 1.1rem}.venue a{color:var(--gold);text-transform:uppercase;text-underline-offset:.35rem;font-size:.9rem}
+/* Entourage */
+#entourage{background:#efe7db;padding:clamp(4rem,7vw,7rem) 0 5rem;text-align:center}.entourage-intro{color:var(--gold)}.people h3{font:400 clamp(1.45rem,2.5vw,2.4rem) 'Playfair Display SC',Georgia,serif;color:var(--gold);margin:2.4rem 0 1rem}.people p{font-size:clamp(.83rem,1.35vw,1.1rem);line-height:1.6;margin:0}.entourage-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem 4rem}.people em{font-size:.85em;display:block;margin-bottom:.35rem}.people .ornament{margin:2rem auto 1rem}
+/* Attire */
+#attire{background:var(--sage);color:#f3eadf;padding:clamp(4rem,7vw,7rem) 0 5rem;text-align:center}#attire .ornament{color:var(--lightgold)}.attire-note{font-size:clamp(.9rem,1.4vw,1.15rem);font-style:italic;line-height:1.7}.swatches{display:flex;justify-content:center;gap:.35rem;flex-wrap:wrap;margin:1.5rem auto 2rem}.swatch{width:clamp(70px,8vw,90px);aspect-ratio:1;border-radius:50%;display:grid;place-items:center;padding:.35rem;font-size:clamp(.65rem,1vw,.85rem);line-height:1.2}.attire-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.2rem;justify-content:center}.attire-card{min-width:0;overflow:hidden;border-radius:16px}.attire-card:last-child:nth-child(odd){grid-column:1/-1;width:calc(50% - .6rem);justify-self:center}.attire-card img{width:100%;height:auto;display:block}.attire-card p{display:none}
+/* RSVP */
+#rsvp{background:#0b0b0c;color:var(--cream);padding:clamp(4rem,7vw,7rem) 0 6rem;text-align:center}#rsvp .ornament{color:var(--lightgold)}#rsvp .section-title{color:#e8c38c}.rsvp-inner{width:min(100% - 2rem,590px);margin:auto}.rsvp-note{font-size:clamp(.9rem,1.45vw,1.15rem);font-style:italic;line-height:1.7}.rsvp-form{margin-top:2rem}.rsvp-form label{display:block;text-align:left;margin-bottom:.55rem;font-size:.9rem}.rsvp-form input[type=text]{width:100%;background:#171615;color:#f4e9d7;border:1px solid #b58d57;border-radius:8px;padding:1.15rem 1.4rem;font-size:1.05rem}.rsvp-form input::placeholder{color:#bca98e}.rsvp-form input:focus-visible{outline:2px solid var(--lightgold);outline-offset:2px}.rsvp-form select:focus-visible,.attendance button:focus-visible{outline:3px solid var(--lightgold);outline-offset:3px}.guest-limit{font-size:clamp(.9rem,1.4vw,1.1rem);font-style:italic;line-height:1.7;margin:1.25rem 0 2rem}.attendance{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin-top:1.6rem}.attendance button{border:1px solid #ead4b5;background:transparent;border-radius:100px;padding:1rem .5rem;color:var(--cream);transition:background .25s,color .25s}.attendance button:hover,.attendance button[aria-pressed=true]{background:#d4ae74;color:#111}.rsvp-status{min-height:2rem;font-size:.85rem;margin:1.2rem auto 0;line-height:1.5}
+/* Footer */
+footer{background:var(--forest);color:var(--cream);padding:3.5rem 1rem;text-align:center;font-size:clamp(.9rem,1.8vw,1.6rem);letter-spacing:.02em}
+@media(max-width:700px){#landing{padding:.7rem .65rem;height:100svh;min-height:0}.topnav{gap:1rem 1.3rem}.topnav a{font-size:.8rem}.invitation{margin-top:.7rem;min-height:0;padding:.6rem .5rem}.couple{font-size:clamp(2.6rem,10vw,4.7rem)}.invitation .ornament{margin:.4rem auto}.date-row{gap:1.5rem}.date-divider{height:65px}.container{width:min(100% - 2rem,1280px)}.gallery-stage{gap:.1rem}.gallery-grid{gap:.4rem}.arrow{font-size:2.5rem;padding:.1rem}.photo-placeholder svg{width:clamp(55px,15vw,110px)}.venue-grid{grid-template-columns:1fr}.venue{min-height:300px}.entourage-grid{gap:1.2rem}.people p{font-size:.78rem}.attire-grid{grid-template-columns:1fr}.attire-card:last-child:nth-child(odd){grid-column:auto;width:100%}.attire-card{max-width:560px;width:100%;justify-self:center}.attendance{gap:.5rem}.attendance button{font-size:.85rem;padding:1rem .3rem}}@media(max-width:380px){.topnav{gap:.7rem}.topnav a{font-size:.72rem}.couple{font-size:3.3rem}.entourage-grid{gap:.65rem}.people p{font-size:.72rem}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{animation-duration:.01ms!important;transition-duration:.01ms!important}.reveal{opacity:1;transform:none}}
 
-if(session){show(true);load()}
+/* Cinematic invitation typography: runs only after the opening button is clicked. */
+#landing .invitation .reveal{opacity:0;transform:translateY(22px);transition:none}
+#landing.hero-playing .invitation .reveal{animation:inviteRise 1.15s cubic-bezier(.2,.65,.25,1) both}
+#landing.hero-playing .invite-prelude{animation-delay:.2s!important}
+#landing.hero-playing .invitation .ornament:first-of-type{animation-delay:.85s!important}
+#landing.hero-playing h1.couple{animation-delay:1.15s!important}
+#landing.hero-playing .amp{animation-delay:1.65s!important}
+#landing.hero-playing h2.couple{animation-delay:2.05s!important}
+#landing.hero-playing .invitation .ornament:nth-of-type(3){animation-delay:2.55s!important}
+#landing.hero-playing .date-row{animation-delay:2.85s!important}
+@keyframes inviteRise{from{opacity:0;transform:translateY(22px);filter:blur(5px)}to{opacity:1;transform:translateY(0);filter:blur(0)}}
+#landing.hero-playing .invitation .ornament span{animation:goldGlow 2.5s ease-in-out 2.7s 1 both}
+@keyframes goldGlow{0%,100%{text-shadow:none}50%{text-shadow:0 0 13px rgba(213,176,109,.55)}}
+@media(prefers-reduced-motion:reduce){#landing .invitation .reveal{opacity:1;transform:none;filter:none}#landing.hero-playing .invitation .reveal,#landing.hero-playing .invitation .ornament span{animation:none!important}}
+
+/* Invitation viewport and RSVP controls */
+#landing .topnav{flex-shrink:0;min-height:1.6rem;align-items:center}
+#landing .invitation{max-height:calc(100svh - 3.5rem)}
+#landing .invite-prelude{font-size:clamp(.7rem,1.4vw,1.08rem)}
+#landing .date-row{font-size:clamp(.75rem,1.4vw,1.25rem)}
+#landing .date-block strong{font-size:clamp(1.7rem,4vh,2.6rem)}
+#landing .ornament{margin-block:clamp(.2rem,1.3vh,.8rem)}
+.lookup-row{display:flex;gap:.65rem}.lookup-row input{min-width:0;flex:1}.gold-button{border:1px solid #cda66c;background:#cda66c;color:#111;padding:0 1.2rem;border-radius:8px;white-space:nowrap}.gold-button:hover{background:#f0d29b}.gold-button:disabled{opacity:.55}
+.group-heading{font:400 1.6rem 'Playfair Display SC',Georgia,serif;color:#e8c38c;margin:1.7rem 0 .7rem}.member-checks{display:grid;gap:.7rem;text-align:left;margin:1.4rem 0}.member-option{display:flex!important;align-items:center;gap:.8rem;border:1px solid #6c5438;border-radius:7px;padding:.9rem 1rem;margin:0!important;cursor:pointer}.member-option input{accent-color:#d4ae74;width:1.2rem;height:1.2rem}.pax-count{color:#d9b779;font-weight:600}.rsvp-status{color:#f1d9b6}.countdown-heading{font-size:.8rem;letter-spacing:.22em;color:#d8b77d}.countdown{display:flex;justify-content:center;gap:clamp(.8rem,4vw,3.5rem);margin:1.5rem auto 2rem}.countdown div{display:flex;flex-direction:column;gap:.25rem;min-width:3rem}.countdown strong{font:400 clamp(1.8rem,5vw,3.4rem) 'Playfair Display SC',Georgia,serif;color:#d7b477}.countdown span{font-size:clamp(.58rem,1vw,.78rem);letter-spacing:.1em}
+[hidden]{display:none!important}
+@media(max-width:700px){.lookup-row{flex-direction:column}.gold-button{padding:1rem}#landing .couple{line-height:1.06}#landing .amp{font-size:1.6rem}#landing .ornament span{font-size:1.3rem}#landing .date-row{gap:1rem}}
+@media(max-height:650px){#landing .couple{font-size:clamp(2.3rem,8vh,4rem)}#landing .ornament{margin-block:.15rem}#landing .date-divider{height:55px}#landing .invite-prelude{font-size:.7rem}}
+
+/* Refined landing: open edges with subtle gold foliage instead of a box */
+#landing .invitation{border:0;position:relative;isolation:isolate}
+.hero-leaves{position:absolute;top:50%;font-family:Georgia,serif;color:#c5a064;opacity:.28;font-size:clamp(2.5rem,5vw,5rem);display:flex;align-items:center;gap:.2rem;pointer-events:none;writing-mode:vertical-rl;animation:foliageIn 2s ease 1s both}
+.hero-leaves span{font-size:1.4em}.hero-leaves-left{left:clamp(-.9rem,1vw,1.5rem);transform:translateY(-50%) rotate(-12deg)}.hero-leaves-right{right:clamp(-.9rem,1vw,1.5rem);transform:translateY(-50%) rotate(168deg)}
+@keyframes foliageIn{from{opacity:0;filter:blur(7px)}to{opacity:.28;filter:blur(0)}}
+/* Attire now shares the Wedding Details ivory and uses three cards per row */
+#attire{background:#f8f4ee;color:#30382b}#attire .ornament{color:var(--gold)}
+.attire-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(.65rem,1.5vw,1.25rem);max-width:1150px;margin-inline:auto}
+.attire-card{border-radius:12px}.attire-card:last-child:nth-child(odd){grid-column:auto;width:100%;justify-self:stretch}
+.attire-card img{width:100%;height:auto;display:block}
+/* Invitation notes: matching the entourage's warm ivory background */
+#guest-notes{background:#efe7db;padding:clamp(3.5rem,6vw,6rem) 0;text-align:center}
+.note-list{width:min(100%,760px);margin:2rem auto 0}.note-item{padding:1.1rem 0 1.4rem;border-bottom:1px solid #b98e51}.note-item:last-child{border-bottom:0}
+.note-item h3{font:400 clamp(1.65rem,3vw,2.5rem) 'Playfair Display SC',Georgia,serif;color:#a67640;margin:.3rem 0 1rem;text-align:left}
+.note-body{display:grid;grid-template-columns:100px 1fr;align-items:center;gap:clamp(1rem,4vw,3rem);text-align:left}.note-body svg{height:100px;width:90px;fill:#a67640}.note-body p{font:400 clamp(.95rem,1.45vw,1.18rem)/1.65 Georgia,serif;text-transform:uppercase;margin:0}.note-body strong{font-weight:700}
+/* Footer */
+footer{padding:4.2rem 1rem 3rem}footer .ornament{color:#c5a064;margin:1rem auto}.footer-script{font:400 clamp(3rem,6vw,5.5rem)/1.1 'Great Vibes',cursive;color:#e8d3b2;margin:0}.footer-love{font:400 clamp(1.9rem,3.4vw,3rem) 'Great Vibes',cursive;color:#e8d3b2;margin:.5rem 0 0}.footer-date{font-size:clamp(.75rem,1.3vw,1rem);letter-spacing:.09em;margin:1.6rem 0 0}.countdown{margin:1.4rem auto 1.5rem}
+@media(max-width:800px){.attire-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.hero-leaves{opacity:.16;font-size:2.5rem}.hero-leaves-left{left:-1.2rem}.hero-leaves-right{right:-1.2rem}}
+@media(max-width:520px){.attire-grid{grid-template-columns:1fr}.attire-card{max-width:440px;margin-inline:auto}.note-item h3{text-align:center}.note-body{grid-template-columns:70px 1fr;gap:.9rem}.note-body svg{width:65px;height:80px}.note-body p{font-size:.85rem}.hero-leaves{font-size:1.8rem;opacity:.13}}
+@media(prefers-reduced-motion:reduce){.hero-leaves{animation:none}}
+
+/* November refinements: fine-line botanical corner branches inspired by the invitation reference */
+#landing .invitation{border:0;overflow:hidden}
+#landing .botanical{position:absolute;pointer-events:none;z-index:-1;color:#c6a46c;width:clamp(155px,27vw,380px);height:auto;opacity:.72;filter:drop-shadow(0 0 1px rgba(220,190,130,.15))}
+#landing .botanical-top{top:-10px;left:-10px;transform:scaleY(-1);transform-origin:center}
+#landing .botanical-bottom{bottom:-10px;right:-10px;transform:scaleX(-1);transform-origin:center}
+#landing.hero-playing .botanical{animation:branchFade 2s ease-out both}
+#landing.hero-playing .botanical-bottom{animation-delay:.45s}
+@keyframes branchFade{from{opacity:0;filter:blur(3px)}to{opacity:.72;filter:blur(0)}}
+#landing .invitation>:not(.botanical){position:relative;z-index:1}
+/* Dark-green palette, centered 3 + 2 outfit cards */
+#attire{background:#303a30;color:#f3eadf}
+#attire .ornament{color:#d5b06d}
+.attire-grid{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:clamp(.6rem,1.3vw,1.1rem);max-width:1160px;margin-inline:auto}
+.attire-card,.attire-card:last-child:nth-child(odd){flex:0 1 calc((100% - 2.2rem)/3);width:auto;max-width:370px;min-width:0;grid-column:auto;justify-self:auto}
+.attire-card img{display:block;width:100%;height:auto}
+.attire-reminders{max-width:850px;margin:3.5rem auto 0}
+.attire-reminders .note-list{margin-top:1rem}
+.attire-reminders .note-item{border-bottom:1px solid rgba(213,176,109,.65)}
+.attire-reminders .note-item h3{color:#f3eadf}
+.attire-reminders .note-body svg{fill:#f3eadf}
+.attire-reminders .note-body svg path[stroke]{stroke:#303a30}
+#guest-notes .note-list{max-width:760px}
+@media(max-width:800px){.attire-card,.attire-card:last-child:nth-child(odd){flex-basis:calc((100% - 1.1rem)/2)}#landing .botanical{width:clamp(135px,28vw,240px);opacity:.5}}
+@media(max-width:520px){.attire-card,.attire-card:last-child:nth-child(odd){flex-basis:100%;max-width:440px}#landing .botanical{width:clamp(95px,28vw,155px);opacity:.35}#landing .botanical-top{left:-25px;top:-15px}#landing .botanical-bottom{right:-25px;bottom:-15px}}
+@media(prefers-reduced-motion:reduce){#landing.hero-playing .botanical{animation:none}}
+
+/* Corner botanicals anchored to the actual section edges, not the content inset. */
+#landing{isolation:isolate}
+#landing .botanical{position:absolute;z-index:0;pointer-events:none;width:clamp(250px,34vw,520px);height:auto;max-width:none;opacity:.78;filter:drop-shadow(0 0 1px rgba(225,192,123,.2));transform-origin:center}
+#landing .botanical-top{top:0;right:0;left:auto;bottom:auto;transform:none}
+#landing .botanical-bottom{bottom:0;left:0;right:auto;top:auto;transform:rotate(180deg)}
+#landing .topnav,#landing .invitation{position:relative;z-index:1}
+#landing.hero-playing .botanical{animation:branchFade 2.1s ease-out both}
+@keyframes branchFade{from{opacity:0;filter:blur(4px)}to{opacity:.78;filter:blur(0)}}
+/* Reminders in a single balanced row below all five color cards. */
+#attire .attire-reminders{max-width:1160px;margin:3rem auto 0}
+#attire .attire-reminders .note-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(1rem,4vw,4rem);max-width:none;width:100%;margin:1.5rem auto 0}
+#attire .attire-reminders .note-item{border:0;padding:0;min-width:0}
+#attire .attire-reminders .note-item:first-child{border-right:1px solid rgba(213,176,109,.65);padding-right:clamp(.5rem,2vw,2rem)}
+#attire .attire-reminders .note-item h3{text-align:center;font-size:clamp(1.3rem,2.3vw,2rem);margin:.3rem 0 1rem}
+#attire .attire-reminders .note-body{justify-content:center;align-items:center;grid-template-columns:clamp(60px,8vw,90px) minmax(0,1fr);gap:1rem;text-align:left}
+#attire .attire-reminders .note-body p{font-size:clamp(.76rem,1.1vw,1rem);line-height:1.65}
+@media(max-width:800px){#landing .botanical{width:clamp(205px,43vw,380px);opacity:.65}}
+@media(max-width:600px){#landing .botanical{width:clamp(170px,50vw,290px);opacity:.46}#attire .attire-reminders .note-list{grid-template-columns:1fr;gap:1.5rem}#attire .attire-reminders .note-item:first-child{border-right:0;border-bottom:1px solid rgba(213,176,109,.65);padding-right:0;padding-bottom:1.5rem}#attire .attire-reminders .note-body{max-width:370px;margin-inline:auto}}
+@media(prefers-reduced-motion:reduce){#landing.hero-playing .botanical{animation:none}}
+
+#attire .attire-reminders .note-list{align-items:stretch;gap:0}
+#attire .attire-reminders .note-item{display:flex;flex-direction:column;align-items:center;padding:0 clamp(1rem,3vw,2.5rem)}
+#attire .attire-reminders .note-item:first-child{padding-right:clamp(1rem,3vw,2.5rem)}
+#attire .attire-reminders .note-item h3{width:100%;text-align:center}
+#attire .attire-reminders .note-body{display:flex;justify-content:center;align-items:center;gap:clamp(1rem,2vw,1.8rem);width:100%;max-width:440px;margin:0 auto}
+#attire .attire-reminders .note-body svg{flex:0 0 75px;width:75px;height:90px}
+#attire .attire-reminders .note-body p{flex:1;max-width:270px;text-align:left}
+#guest-notes .adults-only-note{text-align:center;padding-bottom:2rem}
+#guest-notes .adults-only-note h3{text-align:center}
+#guest-notes .adults-only-note p{font:400 clamp(1rem,1.6vw,1.2rem)/1.75 Georgia,serif;max-width:620px;margin:auto}
+footer .countdown{margin:1rem auto}footer .footer-love{margin:1.5rem 0 0}
+@media(max-width:600px){#attire .attire-reminders .note-item{padding:0 0 1.3rem}#attire .attire-reminders .note-item:first-child{padding-right:0}#attire .attire-reminders .note-body svg{flex-basis:60px;width:60px;height:80px}}
+
+/* Fully editable opening: live typography, not a screenshot. */
+#intro{background:radial-gradient(ellipse at 50% 45%,#18110e 0%,#0b0908 65%,#070605 100%);isolation:isolate;overflow:hidden}
+#intro::before{content:"";position:absolute;inset:0;pointer-events:none;opacity:.22;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.26'/%3E%3C/svg%3E")}
+#intro .opening-content{position:relative;z-index:1;display:flex;align-items:center;flex-direction:column;width:100%;padding:2rem 0;animation:appear 1.5s ease both}
+#intro .opening-title{font-family:'Great Vibes',cursive;font-weight:400;font-size:clamp(4.4rem,10vw,10.7rem);line-height:1.25;letter-spacing:-.025em;color:#ad7b44;margin:0;text-align:center;white-space:nowrap;text-shadow:0 1px 1px #4c2b14}
+#intro .opening-action{margin-top:clamp(1.2rem,2vw,2rem);background:none;border:0;padding:.5rem 1rem;color:#ad7b44;font-family:'Playfair Display SC',Georgia,serif;font-size:clamp(1.25rem,2.8vw,2.55rem);font-weight:400;letter-spacing:.01em;transition:color .25s,transform .25s;animation:none;min-width:0;text-transform:uppercase}
+#intro .opening-action:hover{color:#e4bc7b;transform:translateY(-3px)}
+#intro .opening-action:focus-visible{outline:2px solid #d5b06d;outline-offset:6px}
+#intro .opening-arrows{display:flex;align-items:center;gap:1.25rem;color:#ad7b44;margin-top:1rem;pointer-events:none}
+#intro .opening-arrows::before,#intro .opening-arrows::after{content:"";width:clamp(55px,9vw,140px);height:1px;background:linear-gradient(90deg,transparent,#ad7b44)}
+#intro .opening-arrows::after{transform:rotate(180deg)}
+#intro .opening-arrows span{font:700 3rem/.55 Arial,sans-serif;letter-spacing:-.12em;transform:rotate(90deg);display:block}
+@media(max-width:720px){#intro .opening-title{font-size:clamp(3rem,11vw,5rem);white-space:normal;padding:0 .7rem}#intro .opening-content{padding:1.5rem .4rem}#intro .opening-action{font-size:clamp(1.15rem,4.6vw,1.8rem)}}
+@media(prefers-reduced-motion:reduce){#intro .opening-content{animation:none}}
+
+/* Opening refinement: real text, independent vector flourishes, restrained gilded CTA. */
+#intro .opening-lettering{position:relative;display:flex;align-items:center;justify-content:center;width:100%;max-width:1440px;padding:0 clamp(12px,3vw,45px)}
+#intro .opening-title{position:relative;z-index:2;font-size:clamp(3.5rem,9.1vw,9.7rem);white-space:nowrap;line-height:1.38}
+#intro .opening-swish{position:absolute;top:50%;width:clamp(90px,24vw,365px);height:auto;fill:none;stroke:#ad7b44;stroke-width:1.5;stroke-linecap:round;opacity:.88;pointer-events:none}
+#intro .swish-left{left:0;transform:translateY(-8%)}
+#intro .swish-right{right:0;transform:translateY(-8%)}
+#intro .opening-action{position:relative;isolation:isolate;overflow:hidden;margin-top:clamp(.5rem,1.5vw,1.2rem);padding:.78rem 1.65rem;min-width:0;border:1px solid rgba(197,150,81,.76);border-radius:2px;background:rgba(9,7,6,.55);font-family:'Playfair Display SC',Georgia,serif;font-size:clamp(.72rem,1.12vw,.95rem);letter-spacing:.13em;color:#d6ad73;box-shadow:0 0 0 1px rgba(201,149,73,.09),inset 0 0 12px rgba(201,149,73,.06);transition:background .35s,color .35s,box-shadow .35s,transform .35s}
+#intro .opening-action::after{content:"";position:absolute;z-index:-1;inset:-80% -30%;background:linear-gradient(110deg,transparent 38%,rgba(255,226,169,.04) 44%,rgba(255,228,172,.3) 50%,rgba(255,226,169,.04) 56%,transparent 62%);transform:translateX(-110%);animation:goldGlint 5.5s ease-in-out infinite}
+@keyframes goldGlint{0%,62%{transform:translateX(-110%)}85%,100%{transform:translateX(110%)}}
+#intro .opening-action:hover{color:#ffe2ad;background:rgba(128,86,37,.15);box-shadow:0 0 18px rgba(197,150,81,.28),inset 0 0 12px rgba(201,149,73,.12);transform:translateY(-2px)}
+#intro .opening-arrows{margin-top:1.1rem;opacity:.85}
+#intro .opening-arrows span{font:400 2.3rem/1 Georgia,serif;letter-spacing:0;transform:none;animation:chevronFloat 2.4s ease-in-out infinite}
+@keyframes chevronFloat{50%{transform:translateY(5px)}}
+@media(max-width:720px){#intro .opening-title{font-size:clamp(2.75rem,11vw,5rem);white-space:normal;padding:0 .4rem}#intro .opening-swish{width:25vw;opacity:.55}#intro .opening-action{font-size:.74rem;padding:.8rem 1.1rem}}
+@media(prefers-reduced-motion:reduce){#intro .opening-action::after,#intro .opening-arrows span{animation:none}}
+
+/* Supplied original background and transparent gold calligraphy artwork. */
+#intro{background:#0c0907 url("opening-background.png") center center / cover no-repeat}
+#intro::before{display:none}
+#intro .opening-content{width:100%;max-width:1440px;padding:clamp(1rem,4vw,3rem) 0;gap:0}
+#intro .opening-art{display:block;width:min(100%,1440px);height:auto;object-fit:contain;filter:drop-shadow(0 1px 1px rgba(0,0,0,.15))}
+#intro .opening-action{margin-top:clamp(1rem,2vw,2rem)}
+@media(max-width:720px){#intro{background-position:center}#intro .opening-art{width:115%;max-width:none}#intro .opening-content{overflow:hidden}#intro .opening-action{margin-top:1.3rem}}
+
+/* Midnight Silk opening refinement */
+#intro{background-image:url("opening-background.png");background-size:cover;background-position:center center}
+#intro .opening-content{max-width:none;width:100%;padding:1rem 0;overflow:visible}
+#intro .opening-art{width:100vw;max-width:none;height:auto;object-fit:contain}
+#intro .opening-arrows{display:none!important}
+#intro .opening-action{animation:none!important;box-shadow:none!important;transition:background-color .2s,color .2s,border-color .2s,transform .2s}
+#intro .opening-action::after,#intro .opening-action::before{display:none!important;animation:none!important;content:none!important}
+#intro .opening-action:hover{box-shadow:none!important;background:rgba(128,86,37,.12)}
+@media(max-width:720px){#intro .opening-content{overflow:visible}#intro .opening-art{width:100vw;max-width:none}}
+
+/* Supplied botanical corner artwork: exact PNG assets, pinned to section edges. */
+#landing{position:relative;overflow:hidden;isolation:isolate}
+#landing .botanical{position:absolute;display:block;z-index:0;pointer-events:none;width:clamp(250px,34vw,510px);height:auto;max-width:none;opacity:1;filter:none;transform:none}
+#landing .botanical-top{top:0;right:0;left:auto;bottom:auto;transform:none}
+#landing .botanical-bottom{bottom:0;left:0;right:auto;top:auto;transform:none}
+#landing .topnav,#landing .invitation{position:relative;z-index:1}
+/* Equal-width date and time columns place the divider on the actual center axis. */
+#landing .date-row{display:grid;grid-template-columns:minmax(0,1fr) 1px minmax(0,1fr);align-items:center;gap:clamp(1rem,2.5vw,2.8rem);width:min(100%,430px);margin-inline:auto}
+#landing .date-block,#landing .date-time-block{width:100%;text-align:center;justify-self:center}
+#landing .date-divider{justify-self:center;align-self:center}
+@media(max-width:700px){#landing .botanical{width:clamp(150px,36vw,275px)}#landing .date-row{width:min(100%,310px);gap:clamp(.6rem,2vw,1.2rem)}}
+@media(max-width:420px){#landing .botanical{width:clamp(120px,34vw,175px)}}
+
+/* Supplied ornamental divider SVGs, replacing the former typographic flourishes. */
+.ornament{display:flex;align-items:center;justify-content:center;gap:clamp(5px,1.2vw,13px);width:min(100%,520px);max-width:100%}
+.ornament::before,.ornament::after{content:none!important;display:none!important}
+.ornament .divider-wing{display:block;width:calc((100% - 115px)/2);max-width:196px;min-width:0;height:auto;object-fit:contain}
+.ornament .divider-center{display:block;width:clamp(52px,9vw,85px);height:auto;object-fit:contain;flex-shrink:0}
+.venue .flourish{display:block;width:85px;max-width:35%;height:auto;object-fit:contain}
+@media(max-width:500px){.ornament{gap:5px}.ornament .divider-center{width:54px}.ornament .divider-wing{width:calc((100% - 64px)/2)}}
+
+/* Two accessible palettes, with godparents styled from the supplied reference. */
+.palette-tabs{display:flex;justify-content:center;gap:1rem;margin:1.4rem auto 0;flex-wrap:wrap}
+.palette-tab{min-width:min(210px,42vw);padding:.65rem 1.6rem;border:1px solid #c9a563;border-radius:100px;background:transparent;color:#f3eadf;font-family:Georgia,serif;font-variant:small-caps;font-size:clamp(1rem,1.6vw,1.35rem);cursor:pointer;transition:background .2s}
+.palette-tab.is-active,.palette-tab:hover{background:rgba(213,176,109,.14)}
+.palette-panel[hidden]{display:none!important}
+.godparents-swatches{margin:1.4rem auto 2.5rem}
+.godparents-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(1rem,2vw,2rem);max-width:1030px;margin:0 auto}
+.godparents-card{margin:0;border:2px solid #d3b374;border-radius:17px;overflow:hidden;background:#8b8e77}
+.godparents-card img{width:100%;height:auto;display:block}
+.godparents-card figcaption{padding:0 0 1rem;font-size:.9rem;letter-spacing:.06em;color:#f3eadf}
+#gallery .gallery-stage{gap:0}
+#gallery .gallery-grid{width:100%}
+@media(max-width:600px){.godparents-grid{grid-template-columns:1fr;max-width:470px}.palette-tab{min-width:0;flex:1;padding:.7rem .6rem}}
+
+/* Final polish */
+#landing > .botanical{opacity:.44!important}
+#landing.hero-playing > .botanical{animation:none!important}
+#entourage .people p{font-family:'Montserrat',sans-serif;font-weight:500}
+#entourage .entourage-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:clamp(.7rem,4vw,4rem);row-gap:clamp(1rem,2vw,1.8rem);align-items:stretch}
+#entourage .entourage-role{min-width:0;align-self:stretch}
+#entourage .entourage-role h3{margin:0 0 .8rem}
+#entourage .entourage-role p{font-family:'Montserrat',sans-serif;font-weight:500;overflow-wrap:break-word}
+#entourage .entourage-role em{font-weight:400}
+.godparents-grid{align-items:start}
+.godparents-card{overflow:visible;background:transparent;border:0;border-radius:0}
+.godparents-card img{display:block;width:100%;height:auto;object-fit:contain;max-height:none;border:0}
+.godparents-card figcaption{display:none}
+@media(max-width:600px){#entourage .entourage-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:1.7rem .7rem}#entourage .entourage-role h3{font-size:clamp(1rem,4vw,1.5rem)}#entourage .entourage-role p{font-size:clamp(.7rem,2.6vw,.88rem);line-height:1.55}}
+
+/* Godparents: reconstruct cards from artwork only, never crop a screenshot of the whole section. */
+#attire #panel-godparents .godparents-grid{display:flex!important;flex-direction:column!important;align-items:center!important;gap:clamp(1.4rem,3vw,2.3rem)!important;max-width:100%;margin:2rem auto 0}
+#attire #panel-godparents .godparents-card{box-sizing:border-box;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;width:min(100%,530px);margin:0!important;padding:clamp(1.5rem,4vw,2.4rem) clamp(1rem,3vw,1.6rem) 1rem!important;border:2px solid #d4b477!important;border-radius:18px!important;background:#8b8e77!important;overflow:hidden!important}
+#attire #panel-godparents .godparents-card img{display:block!important;width:100%!important;max-width:100%!important;height:auto!important;max-height:none!important;object-fit:contain!important;position:static!important;transform:none!important;aspect-ratio:auto!important}
+#attire #panel-godparents .godparents-card figcaption{display:block!important;margin:1rem 0 0!important;padding:0!important;color:#f4ede3!important;font:400 1rem/1.3 Montserrat,sans-serif!important;letter-spacing:.04em!important}
+@media(max-width:600px){#attire #panel-godparents .godparents-card{width:100%;padding:1.2rem .8rem .8rem!important}}
+
+/* Godparents: use the complete, original Figma card images.
+   No clipping, artificial card frame, object-fit crop, or recreated captions. */
+#attire #panel-godparents .godparents-grid{display:flex!important;flex-direction:column!important;align-items:center!important;gap:clamp(1rem,3vw,2rem)!important;width:100%!important;max-width:100%!important;margin:2rem auto!important}
+#attire #panel-godparents .godparents-card{display:block!important;width:min(100%,672px)!important;max-width:672px!important;margin:0 auto!important;padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;overflow:visible!important;box-shadow:none!important;aspect-ratio:auto!important;height:auto!important}
+#attire #panel-godparents .godparents-card img{display:block!important;width:100%!important;height:auto!important;max-height:none!important;object-fit:contain!important;object-position:center!important;aspect-ratio:auto!important;position:static!important;transform:none!important;clip-path:none!important}
+
+/* Final pre-deployment adjustments */
+#entourage[hidden]{display:none!important}
+#attire #panel-godparents .godparents-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;align-items:start!important;justify-content:center!important;gap:clamp(.65rem,1.5vw,1.25rem)!important;max-width:760px!important;width:100%!important;margin:2rem auto!important}
+#attire #panel-godparents .godparents-card{width:100%!important;max-width:none!important;min-width:0!important;margin:0!important;overflow:visible!important}
+#attire #panel-godparents .godparents-card img{width:100%!important;height:auto!important;max-height:none!important;object-fit:contain!important}
+#guest-notes .couple-notes-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(1rem,2.5vw,2rem);max-width:1080px;margin:2.4rem auto 0;text-align:center}
+#guest-notes .couple-note{border:1px solid rgba(166,118,64,.5);padding:clamp(1.4rem,3vw,2.4rem);display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:215px}
+#guest-notes .couple-note h3{font:400 clamp(1.15rem,1.8vw,1.65rem)/1.25 'Playfair Display SC',Georgia,serif;color:#a67640;margin:0 0 1rem}
+#guest-notes .couple-note p{font:400 clamp(.91rem,1.2vw,1.05rem)/1.75 'Montserrat',sans-serif;color:#30382b;margin:0;max-width:43ch}
+footer .countdown-heading{font:400 clamp(.85rem,1.3vw,1.2rem)/1.4 'Montserrat',Arial,sans-serif;letter-spacing:.02em;color:#e9e1d7;text-transform:uppercase;margin:0 auto 1rem}
+@media(max-width:600px){#attire #panel-godparents .godparents-grid{grid-template-columns:1fr!important;max-width:430px!important}#guest-notes .couple-notes-grid{grid-template-columns:1fr}#guest-notes .couple-note{min-height:0}}
+</style></head>
+<body class="locked">
+<div id="intro" role="dialog" aria-modal="true" aria-label="Open the wedding invitation"><div class="opening-content"><img class="opening-art" src="you-are-invited-original-vector.svg" alt="You are Invited" width="1440" height="250"><button id="enter" class="opening-action" aria-label="Open the wedding invitation">Click Here to RSVP</button></div></div>
+<main>
+<section id="landing"><img class="botanical botanical-top" src="botanical-top-right.png" alt="" aria-hidden="true"><img class="botanical botanical-bottom" src="botanical-bottom-left.png" alt="" aria-hidden="true"><nav class="topnav" aria-label="Wedding navigation"><a href="#details">DETAILS</a><a href="#attire">ATTIRE</a><a href="#rsvp">RSVP</a></nav><div class="invitation"><p class="invite-prelude reveal">WE JOYFULLY INVITE YOU TO<br>CELEBRATE THE WEDDING OF</p><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><h1 class="couple reveal delay-1">Roi Lauren</h1><div class="amp reveal delay-1">&amp;</div><h2 class="couple reveal delay-1">Jestel Diona</h2><div class="ornament reveal delay-2" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><div class="date-row reveal delay-3"><div class="date-block"><small>JANUARY</small><strong>7</strong><span>2027</span></div><div class="date-divider"></div><div class="date-time-block">THURSDAY<br>2:00 PM</div></div></div></section>
+<section id="gallery"><div class="container"><p class="eyebrow gold reveal">A CELEBRATION OF LOVE</p><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><div class="gallery-stage reveal"><div class="gallery-grid" id="gallery-grid" aria-label="Wedding photo gallery"></div></div><p class="gallery-message reveal">We would be delighted to share this special day with you.<br>Your presence will make our celebration even more meaningful.</p></div></section>
+<section id="details"><div class="container"><p class="eyebrow gold reveal">JOIN US</p><h2 class="section-title reveal">Wedding Details</h2><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><div class="venue-grid"><article class="venue reveal"><img class="flourish" src="divider-center.svg" alt="" aria-hidden="true"><h3>Ceremony</h3><p>ST. JOSEPH THE WORKER PARISH<br>PACDAL, BAGUIO CITY</p><a href="https://www.google.com/maps/search/?api=1&amp;query=St+Joseph+the+Worker+Parish+Pacdal+Baguio+City" target="_blank" rel="noopener noreferrer">View on map ↗</a></article><article class="venue reveal delay-1"><img class="flourish" src="divider-center.svg" alt="" aria-hidden="true"><h3>Reception</h3><p>GRAND SIERRA PINES<br>43 NORTH OUTLOOK DRIVE, BAGUIO CITY</p><a href="https://www.google.com/maps/search/?api=1&amp;query=Grand+Sierra+Pines+43+North+Outlook+Drive+Baguio+City" target="_blank" rel="noopener noreferrer">View on map ↗</a></article></div></div></section>
+<section id="entourage" hidden aria-hidden="true"><div class="container people"><p class="eyebrow entourage-intro reveal">SURROUNDED BY OUR LOVED ONES</p><h2 class="section-title reveal">Our Entourage</h2><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><div class="reveal"><h3>Parents</h3><p>Engr. Jessie Buenaventura &amp; Mrs. Dionisia Buenaventura<br>Mr. Froilan Apostol &amp; Mrs. Myra Apostol</p></div><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><div class="reveal"><h3>Principal Sponsors</h3><p>Mr. Alvin Aquino &amp; Mrs. Millany Aquino<br>Engr. Joseph Cardinez &amp; Mrs. Maritess Cardinez<br>Mr. Romeo Manuel &amp; Mrs. Frielyn Manuel<br>Engr. Fernando Marzan &amp; Mrs. Melvy Marzan<br>Mr. Erwin Paraso &amp; Mrs. Charlene Paraso</p></div><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><div class="entourage-grid">
+<div class="entourage-role reveal"><h3>Best Men</h3><p>John Raphael Apostol<br>Renzo Patrick Castillo (Cord)</p></div>
+<div class="entourage-role reveal"><h3>Maid of Honor</h3><p>Marie Fhalin Fuertes<br>Valerie Celine Agayo (Cord)</p></div>
+<div class="entourage-role reveal"><h3>Groomsmen</h3><p>Juan Carlos Cabotaje (Veil)<br>Jean Sherwin Doronilla (Candle)<br>Engr. Arvin Nomar Gamboa</p></div>
+<div class="entourage-role reveal"><h3>Bridesmaids</h3><p>Sherine Marie Ortaleza (Veil)<br>Ellen Mae Tumalip (Candle)<br>Dra. Dixie Jane Gamboa</p></div>
+<div class="entourage-role reveal"><h3>Ring Bearer</h3><p><em>To carry our symbol of love</em>Jesse Daniel Buenaventura</p></div>
+<div class="entourage-role reveal"><h3>Coin Bearer</h3><p><em>To carry our symbol of treasures</em>Allen Payumo</p></div>
+<div class="entourage-role reveal"><h3>Bible Bearer</h3><p><em>To carry our symbol of faith</em>Josh Marcus Cardinez</p></div>
+<div class="entourage-role reveal"><h3>Flower Girls</h3><p>Patricia Anne Joy Payumo<br>Catherine Joy Sarenas</p></div></div></div></section>
+<section id="attire"><div class="container"><p class="eyebrow reveal">WHAT TO WEAR</p><h2 class="section-title reveal">Guest Color Palette</h2><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><p class="attire-note reveal">We kindly encourage our guests to dress in these<br>sophisticated and muted tones.</p><div class="palette-tabs reveal" role="tablist" aria-label="Attire palette">
+<button class="palette-tab is-active" id="tab-guests" role="tab" aria-selected="true" aria-controls="panel-guests" type="button">Guests</button>
+<button class="palette-tab" id="tab-godparents" role="tab" aria-selected="false" aria-controls="panel-godparents" type="button">Godparents</button>
+</div>
+<div id="panel-guests" class="palette-panel" role="tabpanel" aria-labelledby="tab-guests"><div class="swatches reveal"><div class="swatch" style="background:#080808">Black</div><div class="swatch" style="background:#222124">Charcoal<br>Gray</div><div class="swatch" style="background:#363332">Deep<br>Pewter</div><div class="swatch" style="background:#2c0e14">Deep<br>Burgundy</div><div class="swatch" style="background:#594548">Dark<br>Mauve</div></div><div class="attire-grid"><article class="attire-card reveal"><img src="attire-black.png" alt="Black formal dresses and suits" loading="lazy"></article><article class="attire-card reveal delay-1"><img src="attire-charcoal.png" alt="Charcoal gray formal dresses and suits" loading="lazy"></article><article class="attire-card reveal"><img src="attire-pewter.png" alt="Deep pewter formal dresses and suits" loading="lazy"></article><article class="attire-card reveal delay-1"><img src="attire-burgundy.png" alt="Deep burgundy formal dresses and suits" loading="lazy"></article><article class="attire-card reveal"><img src="attire-mauve.png" alt="Deep mauve formal dresses and suits" loading="lazy"></article></div></div>
+<div id="panel-godparents" class="palette-panel" role="tabpanel" aria-labelledby="tab-godparents" hidden>
+<div class="swatches godparents-swatches"><div class="swatch" style="background:#17243b">Midnight<br>Navy</div><div class="swatch" style="background:#203453">Deep<br>Navy</div><div class="swatch" style="background:#263e63">Classic<br>Navy</div></div>
+<div class="godparents-grid"><figure class="godparents-card"><img src="godparents-men-full.png" alt="Godparents' navy blue formal suits and tuxedos" loading="lazy"></figure><figure class="godparents-card"><img src="godparents-women-full.png" alt="Godparents' navy blue evening gowns" loading="lazy"></figure></div>
+</div><div class="attire-reminders"><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><div class="note-list"><article class="note-item reveal"><h3>For Our Male Guests</h3><div class="note-body"><svg viewBox="0 0 90 100" aria-hidden="true"><path d="M33 9 45 16 57 9 70 19 82 88 63 92 58 40 58 96 32 96 32 40 27 92 8 88 20 19Z"/><path d="M38 11 45 31 52 11M45 17 43 31 46 42 49 31 47 17" stroke="#efe7db" stroke-width="2" fill="none"/></svg><p>Suits, coats, or tuxedos.<br>Ties are optional.<br><strong>Please avoid black ties.</strong></p></div></article>
+<article class="note-item reveal"><h3>For Our Female Guests</h3><div class="note-body"><svg viewBox="0 0 90 100" aria-hidden="true"><path d="M39 10 51 10 55 22 52 43 71 93Q45 100 19 93L38 43 35 22Z"/><path d="M39 10Q45 17 51 10" stroke="#efe7db" fill="none" stroke-width="2"/></svg><p>Evening gowns or cocktail,<br>floor-length dresses.<br><strong>Please do not wear white.</strong></p></div></article>
+</div></div></div></section>
+<section id="guest-notes" aria-labelledby="guest-notes-title"><div class="notes-wrap container"><h2 class="section-title reveal" id="guest-notes-title">Notes from the Couple</h2><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><div class="couple-notes-grid"><article class="couple-note reveal"><h3>An Adults-Only Celebration</h3><p>While we adore your little ones, we have chosen to celebrate our wedding with adults only. We hope you can enjoy a lovely afternoon and evening with us, and we truly appreciate your understanding.</p></article><article class="couple-note reveal"><h3>Gifts / Tokens</h3><p>Your presence is the greatest gift we can ask for. Should you wish to give us something more, a monetary gift would be sincerely appreciated as we begin this exciting chapter together.</p></article><article class="couple-note reveal"><h3>Unplugged Church Ceremony</h3><p>We warmly invite you to be fully present during the church ceremony. Kindly keep your phones away and allow our official photographers to capture the special moments.</p></article><article class="couple-note reveal"><h3>Companions / Plus-ones</h3><p>We kindly request that only guests named on the invitation attend our celebration. Thank you for understanding as we keep our gathering intimate and meaningful.</p></article></div></div></section>
+<section id="rsvp"><div class="rsvp-inner"><p class="eyebrow reveal">KINDLY RESPOND</p><h2 class="section-title reveal">RSVP</h2><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><p class="rsvp-note reveal">It would be an honor to have you in our intimate wedding celebration! Kindly let us know if you will be joining us.</p><form class="rsvp-form reveal" id="rsvp-form"><label for="guest">Find your invitation</label><input id="invitation-code" type="hidden" name="invitation_code"><p id="invitation-link-note" class="rsvp-note" hidden>Your invitation link is ready. Enter your full name to continue.</p><div class="lookup-row"><input id="guest" name="guest" type="text" autocomplete="name" placeholder="Enter your full name" required maxlength="120"><button type="button" id="lookup-btn" class="gold-button">Find guests</button></div><p class="rsvp-status" id="lookup-status" role="status" aria-live="polite"></p><div id="matched-group" hidden><p class="group-heading" id="group-heading"></p><p class="guest-limit">Please select the family or group members who will attend.</p><div id="member-checks" class="member-checks"></div><p id="pax-count" class="pax-count">0 guests attending</p><div class="ornament" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><h3 class="section-title" style="font-size:clamp(1.5rem,2.5vw,2.3rem)">Will You Be Attending?</h3><div class="attendance" role="group" aria-label="Attendance response"><button type="button" data-response="yes">Yes, I'd love to come!</button><button type="button" data-response="no">Sorry, I can't attend!</button></div><p class="rsvp-status" id="rsvp-status" role="status" aria-live="polite"></p></div></form></div></section>
+</main><footer><p class="countdown-heading reveal">See you there!</p><div class="ornament reveal" aria-hidden="true"><img class="divider-wing" src="divider-left.svg" alt=""><img class="divider-center" src="divider-center.svg" alt=""><img class="divider-wing" src="divider-right.svg" alt=""></div><div class="countdown reveal" id="countdown" aria-label="Countdown to January 7, 2027 at 2 PM Philippine time"><div><strong id="cd-days">--</strong><span>DAYS</span></div></div><p class="footer-love reveal">With love, Roi &amp; Jestel</p></footer>
+<script src="config.js"></script><script>
+const intro=document.getElementById('intro');const enter=document.getElementById('enter');enter.addEventListener('click',()=>{intro.classList.add('dismissed');document.body.classList.remove('locked');document.getElementById('landing').classList.add('hero-playing');setTimeout(()=>intro.hidden=true,850)});
+const observer=new IntersectionObserver(entries=>{entries.forEach(e=>{if(e.isIntersecting){e.target.classList.add('visible');observer.unobserve(e.target)}})},{threshold:.12,rootMargin:'0px 0px -30px 0px'});document.querySelectorAll('.reveal:not(#landing .reveal)').forEach(el=>observer.observe(el));
+// Google Apps Script endpoint will be configured later (see README).
+const API_BASE = window.WEDDING_API_BASE || '';
+const inviteCode = new URLSearchParams(window.location.search).get('invite') || '';
+// Invitation links carry the code; no code is displayed publicly in the page.
+if(inviteCode){
+ document.getElementById('invitation-code').value=inviteCode;
+ document.getElementById('invitation-link-note').hidden=false;
+}
+
+let matched = null;
+const lookupBtn = document.getElementById('lookup-btn');
+const lookupStatus = document.getElementById('lookup-status');
+const memberChecks = document.getElementById('member-checks');
+const matchedGroup = document.getElementById('matched-group');
+const rsvpStatus = document.getElementById('rsvp-status');
+const selectedIds = () => [...memberChecks.querySelectorAll('input:checked')].map(x => x.value);
+function updateCount(){const n=selectedIds().length;document.getElementById('pax-count').textContent=n+' '+(n===1?'guest':'guests')+' attending';}
+async function api(path, options={}){const res=await fetch(API_BASE+path,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});const data=await res.json().catch(()=>({}));if(!res.ok || data.ok===false)throw Error(data.error||'Please try again.');return data;}
+lookupBtn.addEventListener('click',async()=>{
+  matched=null;matchedGroup.hidden=true;rsvpStatus.textContent='';lookupStatus.textContent='Searching invitations…';
+  const name=document.getElementById('guest').value.trim();if(name.length<3){lookupStatus.textContent='Please enter your full name.';return;}
+  if(!API_BASE){lookupStatus.textContent='RSVP matching will be available once Google Sheets is connected.';return;}
+  lookupBtn.disabled=true;
+  try{matched=await api('/api/lookup',{method:'POST',body:JSON.stringify({name,invitation_code:inviteCode})});
+    matched.group_name=matched.groupName;matched.members=matched.guests;matched.attending_ids=matched.guests.filter(g=>g.status==='Attending').map(g=>g.id);document.getElementById('group-heading').textContent=matched.group_name;
+    memberChecks.replaceChildren();matched.members.forEach(m=>{const label=document.createElement('label');label.className='member-option';const box=document.createElement('input');box.type='checkbox';box.value=m.id;box.checked=matched.attending_ids.includes(m.id);label.append(box,document.createTextNode(' '+m.name));memberChecks.append(label)});
+    matchedGroup.hidden=false;lookupStatus.textContent='We found your invitation!';updateCount();
+  }catch(e){lookupStatus.textContent=e.message;}finally{lookupBtn.disabled=false;}
+});
+memberChecks.addEventListener('change',updateCount);
+document.getElementById('guest').addEventListener('input',()=>{matched=null;matchedGroup.hidden=true;lookupStatus.textContent='';});
+document.getElementById('guest').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();lookupBtn.click()}});
+document.querySelectorAll('[data-response]').forEach(btn=>btn.addEventListener('click',async()=>{
+ if(!matched)return;const yes=btn.dataset.response==='yes';const attending_ids=yes?selectedIds():[];
+ if(yes&&!attending_ids.length){rsvpStatus.textContent='Select at least one guest attending.';return;}
+ rsvpStatus.textContent='Saving your response…';document.querySelectorAll('[data-response]').forEach(b=>b.disabled=true);
+ try{await api('/api/rsvp',{method:'POST',body:JSON.stringify({name:document.getElementById('guest').value.trim(),invitation_code:inviteCode,responses:matched.guests.map(g=>({id:g.id,status:attending_ids.includes(g.id)?'Attending':'Declined'}))})});rsvpStatus.textContent=yes?'Thank you! Your RSVP for '+attending_ids.length+' '+(attending_ids.length===1?'guest':'guests')+' has been saved.':'Your response has been saved. Thank you for letting us know.';}
+ catch(e){rsvpStatus.textContent=e.message;}finally{document.querySelectorAll('[data-response]').forEach(b=>b.disabled=false);}
+}));
+document.getElementById('rsvp-form').addEventListener('submit',e=>e.preventDefault());
+function countdown(){const diff=Math.max(0,Date.parse('2027-01-07T14:00:00+08:00')-Date.now());const seconds=Math.floor(diff/1000);document.getElementById('cd-days').textContent=String(Math.ceil(diff/86400000));}
+countdown();setInterval(countdown,1000);
+// Add image paths to galleryPhotos later, e.g. 'prenup-1.jpg'.
+const galleryPhotos=[];let galleryPage=0;const grid=document.getElementById('gallery-grid');function drawGallery(){grid.replaceChildren();for(let i=0;i<3;i++){const path=galleryPhotos[(galleryPage*3+i)%galleryPhotos.length];const cell=document.createElement('div');cell.className='photo';if(path){const img=document.createElement('img');img.src=path;img.alt='Roi and Jestel photo '+(galleryPage*3+i+1);cell.append(img)}else{cell.innerHTML='<div class="photo-placeholder" aria-label="Decorative gold Art Deco motif"><svg viewBox="0 0 200 240" aria-hidden="true"><path d="M100 13 179 92 179 148 100 227 21 148 21 92Z"/><path d="M100 29 164 94 164 146 100 211 36 146 36 94Z"/><path d="M100 46V194M49 120H151M100 46 149 120 100 194 51 120Z"/><path d="M100 65 137 120 100 175 63 120Z"/><path d="M100 84 124 120 100 156 76 120Z"/><path d="M21 120H6M179 120H194M100 13V3M100 227V237"/><circle cx="100" cy="120" r="7"/><circle cx="100" cy="120" r="2" fill="#a67640" stroke="none"/><path d="M6 112V128M194 112V128M92 3H108M92 237H108"/></svg></div>'}grid.append(cell)}}drawGallery();
+
+const initialAttire=new URLSearchParams(window.location.search).get('attire')?.toLowerCase();
+document.querySelectorAll('.palette-tab').forEach(tab=>tab.addEventListener('click',()=>{
+  document.querySelectorAll('.palette-tab').forEach(t=>{const active=t===tab;t.classList.toggle('is-active',active);t.setAttribute('aria-selected',String(active));});
+  document.querySelectorAll('.palette-panel').forEach(panel=>panel.hidden=panel.id!==tab.getAttribute('aria-controls'));
+}));
+if(initialAttire==='godparents')document.getElementById('tab-godparents').click();
 </script></body></html>

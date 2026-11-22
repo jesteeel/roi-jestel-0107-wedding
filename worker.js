@@ -19,6 +19,7 @@ export default {async fetch(request,env){
  else if(path==='/api/admin/login') payload={action:'adminLogin',password:input.passcode};
  else if(path==='/api/admin/groups' && input.operation==='list') payload={action:'adminList',token};
  else if(path==='/api/admin/guest/upsert') payload={action:'adminUpsertGuest',token,...input};
+ else if(path==='/api/admin/guest/sent') payload={action:'adminSetInvitationSent',token,guestId:input.guestId,invitationSent:input.invitationSent};
  else if(path==='/api/admin/guest/delete') payload={action:'adminDeleteGuest',token,guestId:input.guestId};
  else if(path==='/api/admin/logout') payload={action:'adminLogout',token};
  else return json({error:'Unknown endpoint'},404,cors);
